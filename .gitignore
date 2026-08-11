@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+# Собранное и черновое: в репозиторий не едет.
+data/
+research/
+tmp/
+docs/
+.cursor_import_backup/
+
+# Адреса прокси и прочие ключи рядом с кодом не лежат, но на всякий случай.
+proxies*.json

@@ -1,0 +1,107 @@
+[
+ {
+  "item_id": "8148472337",
+  "title": "Продавец консультант (м. Новослободская )",
+  "url": "https://www.avito.ru/moskva/vakansii/prodavets_konsultant_m._novoslobodskaya_8148472337",
+  "price": 60000,
+  "snippet": "Работа в «Столото» — станьте частью крупнейшей лотерейной сети России!\n\n«Столото» — лидер на рынке государственных лотерей, часть группы компаний S8 Capital.\n\nУ нас 2500 торговых точек по всей стране и команда из 5500 + энергичных людей.\n\nПрисоединяй...",
+  "published_ts": 1785669022000,
+  "published_at": "2026-08-02T11:10:22+00:00",
+  "city": "Москва",
+  "location_id": 637640,
+  "address": "Москва, Новослободская улица, 4",
+  "area": null,
+  "metro": [
+   {
+    "станция": "Новослободская",
+    "расстояние": null
+   }
+  ],
+  "coords": {
+   "lat": 55.779919,
+   "lng": 37.601771
+  },
+  "seller_name": "Столото",
+  "seller_id": null,
+  "seller_brand": "i134941815",
+  "seller_url": "https://www.avito.ru/brands/i134941815",
+  "seller_rating": null,
+  "seller_reviews": null,
+  "images": [
+   "https://60.img.avito.st/image/1/1.ccitpLaA3SGrAG8kw6kniIYE3yUfE90hH3S8JR-32JMcB9k7qwBvJBs.vkaGZT09Zx8dfohlyMC0wS1XAN69phx_YeBrZuBCUt4"
+  ],
+  "category": "vakansii",
+  "category_id": 111,
+  "micro_category_id": 2278189
+ },
+ {
+  "item_id": "7714485148",
+  "title": "Сопровождение пациентов ежедневные выплаты",
+  "url": "https://www.avito.ru/moskva/vakansii/soprovozhdenie_patsientov_ezhednevnye_vyplaty_7714485148",
+  "price": 4750,
+  "snippet": "Сопровождение пациентов в больнице | Работа с ежедневной оплатой + проживание.\n\nИщешь подработку с мгновенным доходом?\nСтабильная работа с ежедневной оплатой для добрых и отзывчивых!\nЭто идеальный вариант работы для тех, кто ищет гибкий график и быст...",
+  "published_ts": 1785667150000,
+  "published_at": "2026-08-02T10:39:10+00:00",
+  "city": "Москва",
+  "location_id": 637640,
+  "address": "Москва, Федеративный пр-т, 17",
+  "area": null,
+  "metro": [
+   {
+    "станция": "Новогиреево",
+    "расстояние": "500 м"
+   }
+  ],
+  "coords": {
+   "lat": 55.755566,
+   "lng": 37.813746
+  },
+  "seller_name": "АРНИ - Работа возле дома",
+  "seller_id": null,
+  "seller_brand": "arniservice",
+  "seller_url": "https://www.avito.ru/brands/arniservice",
+  "seller_rating": null,
+  "seller_reviews": null,
+  "images": [
+   "https://20.img.avito.st/image/1/1.seZJpbaAHQ9PAa8KJ4uJg2IFHwv7Eh0P-3V8C_u2GL34BhkVTwGvCv8.wkaj9fASGR4J8D2qRJsy9YQnlovnvdkXyN5CzG6wFO0?cqp=2.cCHskNzmyzLcYDhMdcCH_nvsEV9F75CDAHlwb7XvKZW--cKZrcmEss5RhhiwY783joV1rwYDZ2D0RS_fj87G72s7dtw="
+  ],
+  "category": "vakansii",
+  "category_id": 111,
+  "micro_category_id": 2278190
+ },
+ {
+  "item_id": "8069809224",
+  "title": "Продавец-кассир (м. Щукинская)",
+  "url": "https://www.avito.ru/moskva/vakansii/prodavets-kassir_m._schukinskaya_8069809224",
+  "price": 85000,
+  "snippet": "Оформление за 1 день! Удобный график на выбор. Без штрафов. Компенсация медкнижки. Зарплата без задержек.\n\nЧто предлагаем:\n\n— Официальное оформление и стабильную «белую» заработную плату.\n\n— Возможность работать в комфортной обстановке без штрафов.\n\n...",
+  "published_ts": 1785657314000,
+  "published_at": "2026-08-02T07:55:14+00:00",
+  "city": "Москва",
+  "location_id": 637640,
+  "address": "Москва, Таганско-Краснопресненская линия, метро Щукинская",
+  "area": null,
+  "metro": [
+   {
+    "станция": "Щукинская",
+    "расстояние": null
+   }
+  ],
+  "coords": {
+   "lat": 55.808832,
+   "lng": 37.463772
+  },
+  "seller_name": "ВкусВилл",
+  "seller_id": null,
+  "seller_brand": "i154588840",
+  "seller_url": "https://www.avito.ru/brands/i154588840",
+  "seller_rating": null,
+  "seller_reviews": null,
+  "images": [
+   "https://90.img.avito.st/image/1/1.N22dP7aAm4SbmymB_z9ILa6fmYAviJuEL-_6gC8snjYsnJ-em5spgSs.QfoM6gC2N8yQsqZUlC_SWgPFHWxnaWuoU4d_mt0jIvc"
+  ],
+  "category": "vakansii",
+  "category_id": 111,
+  "micro_category_id": 2278189
+ }
+]
