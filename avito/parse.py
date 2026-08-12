@@ -11,7 +11,7 @@
     без них не возвращается, а уходит в брак с причиной;
   * поля, которых у Авито штатно не бывает (продавец, рейтинг, метро, адрес), приходят
     как None или пустой список и браком не считаются;
-  * если брака больше пяти процентов страницы, разбор поднимает ParseError: одно кривое
+  * если брака больше пяти процентов страницы, разбор поднимает ОшибкуРазбора: одно кривое
     объявление — это Авито, каждое двадцатое — это мы сломались;
   * рекламные врезки без идентификатора и ссылки — не брак, они просто выбрасываются.
 """
@@ -24,8 +24,9 @@ import re
 
 from avito.errors import ОшибкаРазбора
 
-__all__ = ["ParseError", "catalog_state", "hydration", "parse_catalog", "parse_item",
-           "parse_date", "clean_text"]
+__all__ = ["состояние_выдачи", "состояние_карточки", "разобрать_выдачу",
+           "разобрать_карточку", "разобрать_дату", "очистить_текст",
+           "ссылка_на_витрину"]
 
 BASE = "https://www.avito.ru"
 ДОЛЯ_БРАКА = 0.05
@@ -35,29 +36,26 @@ BASE = "https://www.avito.ru"
           "декабря": 12}
 
 
-class ParseError(ОшибкаРазбора):
-    """Страница не разобралась целиком: либо это не данные, либо структура поехала."""
-
-
 # --------------------------------------------------------------- достаём состояние
 
-def catalog_state(page: str) -> dict:
+def состояние_выдачи(page: str) -> dict:
     """Состояние каталога, выдачи поиска или витрины продавца."""
     m = re.search(r'<script type="mime/invalid" data-mfe-state="true">(.*?)</script>',
                   page, re.S)
     if not m:
-        raise ParseError("состояния каталога нет — это не выдача, а страница блокировки")
+        raise ОшибкаРазбора(
+            "состояния каталога нет — это не выдача, а страница блокировки")
     raw = m.group(1)
     if "&quot;" in raw[:200]:
         raw = _html.unescape(raw)
     return json.loads(raw)
 
 
-def hydration(page: str) -> dict:
+def состояние_карточки(page: str) -> dict:
     """Состояние карточки: строка внутри JSON.parse, экранированная дважды."""
     i = page.find("window.__staticRouterHydrationData")
     if i < 0:
-        raise ParseError("состояния карточки нет — это не объявление, а заглушка")
+        raise ОшибкаРазбора("состояния карточки нет — это не объявление, а заглушка")
     try:
         k = page.index('JSON.parse("', i) + len("JSON.parse(")
         p, out = k + 1, []
@@ -70,12 +68,12 @@ def hydration(page: str) -> dict:
             out.append(c); p += 1
         return json.loads(json.loads('"' + "".join(out) + '"'))
     except (ValueError, IndexError) as e:
-        raise ParseError(f"состояние карточки не распаковалось: {e}") from e
+        raise ОшибкаРазбора(f"состояние карточки не распаковалось: {e}") from e
 
 
 # ------------------------------------------------------------------- мелкие помощники
 
-def clean_text(s: str | None) -> str | None:
+def очистить_текст(s: str | None) -> str | None:
     """HTML описания -> обычный текст: абзацы и <br> становятся переносами строк."""
     if not s:
         return None
@@ -115,7 +113,7 @@ def _iva(it: dict, шаг: str) -> dict:
     return блоки[0].get("payload") or {}
 
 
-def parse_date(s: str | None, ref: dt.datetime) -> dt.datetime | None:
+def разобрать_дату(s: str | None, ref: dt.datetime) -> dt.datetime | None:
     """«29 июня в 10:25» -> datetime. ref — момент СНЯТИЯ страницы, не текущий.
 
     Внимание: строку в карточке Авито рисует в часовом поясе того, кто смотрит, —
@@ -152,7 +150,7 @@ def parse_date(s: str | None, ref: dt.datetime) -> dt.datetime | None:
 
 # ------------------------------------------------------------------------- каталог
 
-ОБЯЗАТЕЛЬНЫЕ_В_КАТАЛОГЕ = ("item_id", "title", "url", "published_ts", "published_at")
+ОБЯЗАТЕЛЬНЫЕ_В_КАТАЛОГЕ = ("номер", "заголовок", "ссылка", "поднято_мс", "поднято")
 
 
 def _объявление_каталога(it: dict) -> dict:
@@ -170,37 +168,37 @@ def _объявление_каталога(it: dict) -> dict:
 
     ссылка = it.get("urlPath") or ""
     коорд = it.get("coords") or {}
-    ид_продавца, бренд = _продавец_из_ссылки(профиль.get("link"))
+    ключ_продавца, бренд = _продавец_из_ссылки(профиль.get("link"))
     return {
-        "item_id": str(it["id"]) if it.get("id") else None,
-        "title": it.get("title") or None,
-        "url": BASE + ссылка.split("?")[0] if ссылка else None,
-        "price": _число(цена.get("value")),
-        "snippet": clean_text(_iva(it, "DescriptionStep").get("description")),
+        "номер": str(it["id"]) if it.get("id") else None,
+        "заголовок": it.get("title") or None,
+        "ссылка": BASE + ссылка.split("?")[0] if ссылка else None,
+        "цена": _число(цена.get("value")),
+        "выжимка": очистить_текст(_iva(it, "DescriptionStep").get("description")),
         # сырая метка как пришла — единственное абсолютное время, какое даёт Авито
-        "published_ts": ts,
+        "поднято_мс": ts,
         # она же разобранная; пояс указываем явно, иначе fromtimestamp возьмёт часовой
         # пояс машины и на сервере в UTC все даты молча уехали бы на часы
-        "published_at": dt.datetime.fromtimestamp(ts / 1000, dt.timezone.utc) if ts else None,
-        "city": (it.get("location") or {}).get("name") or None,
-        "location_id": it.get("locationId"),
+        "поднято": dt.datetime.fromtimestamp(ts / 1000, dt.timezone.utc) if ts else None,
+        "город": (it.get("location") or {}).get("name") or None,
+        "код_места": it.get("locationId"),
         # полный адрес лежит в coords.address_user (84%), а не в geo.formattedAddress (40%)
-        "address": (коорд.get("address_user") or "").strip() or None,
-        "area": (гео.get("formattedAddress") or "").strip() or None,
-        "metro": метро,
-        "coords": _координаты(коорд),
-        "seller_name": профиль.get("title") or None,
+        "адрес": (коорд.get("address_user") or "").strip() or None,
+        "местность": (гео.get("formattedAddress") or "").strip() or None,
+        "метро": метро,
+        "координаты": _координаты(коорд),
+        "продавец_имя": профиль.get("title") or None,
         # у частника в ссылке лежит настоящий ключ продавца, тот же, что в карточке;
         # у магазина только слаг бренда, и как sellerId он не работает — проверено
-        "seller_id": ид_продавца,
-        "seller_brand": бренд,
-        "seller_url": BASE + профиль["link"].split("?")[0] if профиль.get("link") else None,
-        "seller_rating": рейтинг.get("score"),
-        "seller_reviews": _число(рейтинг.get("summary")),
-        "images": [u for u in (_макс_фото(im) for im in it.get("images") or []) if u],
-        "category": (it.get("category") or {}).get("slug") or None,
-        "category_id": it.get("categoryId"),
-        "micro_category_id": it.get("microCategoryId"),
+        "продавец_ключ": ключ_продавца,
+        "продавец_бренд": бренд,
+        "продавец_ссылка": BASE + профиль["link"].split("?")[0] if профиль.get("link") else None,
+        "продавец_рейтинг": рейтинг.get("score"),
+        "продавец_отзывов": _число(рейтинг.get("summary")),
+        "фотографии": [u for u in (_макс_фото(im) for im in it.get("images") or []) if u],
+        "категория": (it.get("category") or {}).get("slug") or None,
+        "код_категории": it.get("categoryId"),
+        "код_подкатегории": it.get("microCategoryId"),
     }
 
 
@@ -229,21 +227,22 @@ def _координаты(c) -> dict | None:
         return None
 
 
-def parse_catalog(источник: str | dict) -> dict:
+def разобрать_выдачу(источник: str | dict) -> dict:
     """Страница каталога -> счётчики и список объявлений.
 
-    Возвращает: count (сколько всего нашлось), items_on_page, last_page (докуда пускают),
-    items (разобранные), rejected (брак с причиной), promo (сколько врезок выброшено).
+    Возвращает: нашлось (сколько всего по мнению Авито), на_странице, страниц (докуда
+    пускают листать), объявления (разобранные), брак (с причиной), врезок (сколько
+    рекламы выброшено).
     """
-    st = catalog_state(источник) if isinstance(источник, str) else источник
+    st = состояние_выдачи(источник) if isinstance(источник, str) else источник
     try:
         d = st["loaderData"]["data"]
         сырые = d["catalog"]["items"]
     except (KeyError, TypeError) as e:
-        raise ParseError(f"структура каталога поехала: нет {e}") from e
+        raise ОшибкаРазбора(f"структура каталога поехала: нет {e}") from e
 
     последняя = re.search(r"[?&]p=(\d+)", (d["catalog"].get("pager") or {}).get("last") or "")
-    items, брак, промо = [], [], 0
+    объявления, брак, промо = [], [], 0
 
     for it in сырые:
         if not it.get("id") and not it.get("urlPath"):
@@ -258,32 +257,33 @@ def parse_catalog(источник: str | dict) -> dict:
         if нет:
             брак.append({"id": it.get("id"), "причина": "нет обязательных: " + ", ".join(нет)})
             continue
-        items.append(об)
+        объявления.append(об)
 
-    всего = len(items) + len(брак)
+    всего = len(объявления) + len(брак)
     if всего and len(брак) / всего > ДОЛЯ_БРАКА:
         причины = ", ".join(sorted({b["причина"] for b in брак})[:3])
-        raise ParseError(f"брак в {len(брак)} из {всего} объявлений — так не бывает; {причины}")
+        raise ОшибкаРазбора(
+            f"брак в {len(брак)} из {всего} объявлений — так не бывает; {причины}")
 
-    return {"count": d.get("count"),
-            "items_on_page": d.get("itemsOnPage"),
-            "last_page": int(последняя.group(1)) if последняя else 1,
-            "items": items, "rejected": брак, "promo": промо}
+    return {"нашлось": d.get("count"),
+            "на_странице": d.get("itemsOnPage"),
+            "страниц": int(последняя.group(1)) if последняя else 1,
+            "объявления": объявления, "брак": брак, "врезок": промо}
 
 
 # ------------------------------------------------------------------------- карточка
 
-ОБЯЗАТЕЛЬНЫЕ_В_КАРТОЧКЕ = ("item_id", "title")
+ОБЯЗАТЕЛЬНЫЕ_В_КАРТОЧКЕ = ("номер", "заголовок")
 
 
-def parse_item(источник: str | dict, ref: dt.datetime | None = None) -> dict:
+def разобрать_карточку(источник: str | dict, ref: dt.datetime | None = None) -> dict:
     """Страница объявления -> данные. ref — момент снятия страницы, для разбора даты."""
-    st = hydration(источник) if isinstance(источник, str) else источник
+    st = состояние_карточки(источник) if isinstance(источник, str) else источник
     try:
         bi = st["loaderData"]["catalog-or-main-or-item"]["buyerItem"]
         it = bi["item"]
     except (KeyError, TypeError) as e:
-        raise ParseError(f"структура карточки поехала: нет {e}") from e
+        raise ОшибкаРазбора(f"структура карточки поехала: нет {e}") from e
 
     ref = ref or dt.datetime.now()
     продавец = bi.get("seller") or {}
@@ -304,39 +304,40 @@ def parse_item(источник: str | dict, ref: dt.datetime | None = None) -> 
              for r in гео.get("references") or []]
 
     об = {
-        "item_id": str(it.get("id")) if it.get("id") else None,
-        "title": it.get("title") or None,
-        "price": _число(it.get("price")),
-        "description": clean_text(it.get("description")),
-        "published_at": parse_date(it.get("sortFormatedDate"), ref),
-        "views_total": просмотры.get("totalViews"),
-        "views_today": просмотры.get("todayViews"),
-        "city": (it.get("location") or {}).get("name") or None,
-        "city_slug": (it.get("location") or {}).get("slug") or None,
-        "address": it.get("address") or None,
-        "coords": _координаты(гео.get("coords")),
-        "metro": метро,
-        "characteristics": характеристики,
-        "images": [u for u in (_макс_фото(m.get("urls")) for m in медиа) if u],
-        "is_active": bi.get("isItemActiveOrUserHasAccess"),
-        "closed_status": bi.get("closedItemStatus") or None,
-        "canonical": bi.get("seoCanonicalUrl") or None,
+        "номер": str(it.get("id")) if it.get("id") else None,
+        "заголовок": it.get("title") or None,
+        "цена": _число(it.get("price")),
+        "описание": очистить_текст(it.get("description")),
+        "поднято": разобрать_дату(it.get("sortFormatedDate"), ref),
+        "просмотров_всего": просмотры.get("totalViews"),
+        "просмотров_сегодня": просмотры.get("todayViews"),
+        "город": (it.get("location") or {}).get("name") or None,
+        "город_слаг": (it.get("location") or {}).get("slug") or None,
+        "адрес": it.get("address") or None,
+        "координаты": _координаты(гео.get("coords")),
+        "метро": метро,
+        "характеристики": характеристики,
+        "фотографии": [u for u in (_макс_фото(m.get("urls")) for m in медиа) if u],
+        "активно": bi.get("isItemActiveOrUserHasAccess"),
+        "закрыто_почему": bi.get("closedItemStatus") or None,
+        "постоянная_ссылка": bi.get("seoCanonicalUrl") or None,
         # ключ продавца — именно favoriteSeller.userKey; userHashedId это НЕ продавец,
-        # он одинаковый у всех и относится к нашей собственной сессии
-        "seller_key": (bi.get("favoriteSeller") or {}).get("userKey") or None,
+        # он одинаковый у всех и относится к нашей собственной сессии. Имя ключа общее
+        # с каталогом: там он приходит из ссылки на профиль и это то же самое значение
+        "продавец_ключ": (bi.get("favoriteSeller") or {}).get("userKey") or None,
         # бренд достаём и здесь: по нему карточка склеивается с тем, что видел каталог
-        "seller_brand": _продавец_из_ссылки(_ссылка_продавца(bi))[1],
-        "seller_name": продавец.get("name") or None,
-        "seller_is_company": продавец.get("isCompany"),
-        "seller_since": продавец.get("tenureSince") or None,
-        "seller_url": _ссылка_продавца(bi),
-        "seller_rating": рейтинг.get("scoreFloat"),
-        "seller_reviews": _число(рейтинг.get("summary")),
+        "продавец_бренд": _продавец_из_ссылки(_ссылка_продавца(bi))[1],
+        "продавец_имя": продавец.get("name") or None,
+        "продавец_компания": продавец.get("isCompany"),
+        "продавец_на_авито_с": продавец.get("tenureSince") or None,
+        "продавец_ссылка": _ссылка_продавца(bi),
+        "продавец_рейтинг": рейтинг.get("scoreFloat"),
+        "продавец_отзывов": _число(рейтинг.get("summary")),
     }
 
     нет = [k for k in ОБЯЗАТЕЛЬНЫЕ_В_КАРТОЧКЕ if об.get(k) is None]
     if нет:
-        raise ParseError("в карточке нет обязательных полей: " + ", ".join(нет))
+        raise ОшибкаРазбора("в карточке нет обязательных полей: " + ", ".join(нет))
     return об
 
 
@@ -350,7 +351,7 @@ def _ссылка_продавца(bi: dict) -> str | None:
     return None
 
 
-def seller_catalog_url(seller_key: str, region: str = "all", category: str = "") -> str:
+def ссылка_на_витрину(ключ_продавца: str, регион: str = "all", категория: str = "") -> str:
     """Витрина продавца. Без категории в пути список приходит пустым — проверено."""
-    хвост = f"/{category}" if category else ""
-    return f"{BASE}/{region}{хвост}?sellerId={seller_key}"
+    хвост = f"/{категория}" if категория else ""
+    return f"{BASE}/{регион}{хвост}?sellerId={ключ_продавца}"

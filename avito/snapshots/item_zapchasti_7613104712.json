@@ -1,26 +1,26 @@
 {
- "item_id": "7613104712",
- "title": "Фара левая/правая Mazda 3 (BK) 2003-2009 (Седан)",
- "price": 10990,
- "description": "Фара правая/левая Mazda 3 BK \\ Мазда 3 BK с 2003 по 2009 год выпуска! \n❗️Примечание: Блок фара левая-правая / галоген (линзованная) / Кузов Седан / комплект (2 фары) / \n❗️Подходит к автомобилям: 2003 2004 2005 2006 2007 2008 2009 годов выпуска! \n✅НОВОЕ\n®️Оpигинaльный номеp:\nФара Левая: BN8V-51-0L0D\nФара Правая: BN8V-51-0K0D\nОтправка ТК 📦\nАвито Доставка 📥\nДоставка Курьером 🚚",
- "published_at": "2026-07-22T13:58:00",
- "views_total": 12567,
- "views_today": 3,
- "city": "Москва",
- "city_slug": "moskva",
- "address": "Москва, Ореховый б-р",
- "coords": {
+ "номер": "7613104712",
+ "заголовок": "Фара левая/правая Mazda 3 (BK) 2003-2009 (Седан)",
+ "цена": 10990,
+ "описание": "Фара правая/левая Mazda 3 BK \\ Мазда 3 BK с 2003 по 2009 год выпуска! \n❗️Примечание: Блок фара левая-правая / галоген (линзованная) / Кузов Седан / комплект (2 фары) / \n❗️Подходит к автомобилям: 2003 2004 2005 2006 2007 2008 2009 годов выпуска! \n✅НОВОЕ\n®️Оpигинaльный номеp:\nФара Левая: BN8V-51-0L0D\nФара Правая: BN8V-51-0K0D\nОтправка ТК 📦\nАвито Доставка 📥\nДоставка Курьером 🚚",
+ "поднято": "2026-07-22 13:58:00",
+ "просмотров_всего": 12567,
+ "просмотров_сегодня": 3,
+ "город": "Москва",
+ "город_слаг": "moskva",
+ "адрес": "Москва, Ореховый б-р",
+ "координаты": {
   "lat": 55.6113,
   "lng": 37.72811
  },
- "metro": [],
- "characteristics": {
+ "метро": [],
+ "характеристики": {
   "Состояние": "Новое",
   "Доступность": "В наличии",
   "Производитель": "ATEK",
   "Номер запчасти": "BN8V-51-0K0D"
  },
- "images": [
+ "фотографии": [
   "https://70.img.avito.st/image/1/1.hjpKf7a4KtN8yKjeSm2HUx_eKNX03qjFfNMo0frWItn8.9_kmJfGeZfeFXdIAc8uqWHz2-RIaiqUSdMpXhiEnT24",
   "https://50.img.avito.st/image/1/1.SFNJkba45Lp_Jma3Vch4Oxww5rz3MGasfz3muPk47LD_.WaAwatOxKOmNO_sP0f2i9AxaMJemz9TpHeYY-e36sqI",
   "https://00.img.avito.st/image/1/1.LimbX7a4gsCt6ADNyz9YQc7-gMYl_gDWrfOAwiv2isot.BasPQLp0D4iz_iJtBmO2L9iXfoD_ZcbDxNmR40B3W1A?cqp=2.TSzMy-m0u9ojo94xoNTr4TIkcUBjMu1L_y5Z6Lr-VHA-3xfoRpsvf1jN4IBF36LEO13sxOCjYv9KRoXzpmAFvKTQ",
@@ -30,14 +30,15 @@
   "https://50.img.avito.st/image/1/1.m3P8_La4N5rKS7WXxuLuG6ldNZxCXbWMylA1mExVP5BK.oPiiYcoCzjAvWAs79XsiiZKEbcRZeQVzv4zrq6lnSwE",
   "https://00.img.avito.st/image/1/1.6gR9lra4Ru1LIcTgJbmXayg3ROvDN8T7SzpE780_TufL.ENADAvTSavrPxFoUeu2h847tXk8fsSHKBVx7K8KMIVQ?cqp=2.TSzMy-m0u9ojo94xoNTr4TIkcUBjMu1L_y5Z6Lr-VHA-3xfoRpsvf1jN4IBF36LEO13sxOCjYv9KRoXzpmAFvKTQ"
  ],
- "is_active": true,
- "closed_status": null,
- "canonical": "https://www.avito.ru/moskva/zapchasti_i_aksessuary/fara_levayapravaya_mazda_3_bk_2003-2009_sedan_7613104712",
- "seller_key": "ad393abe8b4756f6e8bfda58e92e7241",
- "seller_name": "ManarAutoLamp",
- "seller_is_company": true,
- "seller_since": null,
- "seller_url": "https://www.avito.ru/brands/manarparts",
- "seller_rating": 4.8,
- "seller_reviews": 324
+ "активно": true,
+ "закрыто_почему": null,
+ "постоянная_ссылка": "https://www.avito.ru/moskva/zapchasti_i_aksessuary/fara_levayapravaya_mazda_3_bk_2003-2009_sedan_7613104712",
+ "продавец_ключ": "ad393abe8b4756f6e8bfda58e92e7241",
+ "продавец_бренд": "manarparts",
+ "продавец_имя": "ManarAutoLamp",
+ "продавец_компания": true,
+ "продавец_на_авито_с": null,
+ "продавец_ссылка": "https://www.avito.ru/brands/manarparts",
+ "продавец_рейтинг": 4.8,
+ "продавец_отзывов": 324
 }

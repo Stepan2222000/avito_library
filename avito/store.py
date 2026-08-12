@@ -6,8 +6,8 @@
   * но пустотой не затираем: если источник поля не знает, старое значение остаётся
     (каталог не знает описания и характеристик, карточка не знает позиции в выдаче);
   * всё, что меняется при каждом визите — просмотры, дата публикации, цена, — уходит
-    в item_metrics отдельной строкой на наблюдение;
-  * в changes попадают только осмысленные события: цена, заголовок, активность,
+    в «наблюдения» отдельной строкой на визит;
+  * в «изменения» попадают только осмысленные события: цена, заголовок, активность,
     поднятие объявления, смена продавца;
   * при недоступной базе ничего не буферизуем и падаем — так решено сознательно.
 
@@ -41,7 +41,7 @@ def _дсн(явно: str | None = None) -> str:
     return из
 
 # поля, изменение которых пишется в журнал
-ОТСЛЕЖИВАЕМЫЕ = ("price", "title", "is_active", "published_ts", "seller_id")
+ОТСЛЕЖИВАЕМЫЕ = ("цена", "заголовок", "активно", "поднято_мс", "продавец")
 
 # столкновения двух работников на одних и тех же строках
 СТОЛКНОВЕНИЯ = (asyncpg.DeadlockDetectedError, asyncpg.UniqueViolationError,
@@ -53,19 +53,19 @@ def _хеш(s: str) -> str:
     return hashlib.md5(s.encode()).hexdigest()
 
 
-class Store:
+class Склад:
     def __init__(self, dsn: str | None = None, *, min_size: int = 2, max_size: int = 10):
         self._dsn, self._min, self._max = _дсн(dsn), min_size, max_size
         self._pool: asyncpg.Pool | None = None
 
-    async def pool(self) -> asyncpg.Pool:
+    async def пул(self) -> asyncpg.Pool:
         if self._pool is None:
             self._pool = await asyncpg.create_pool(
                 self._dsn, min_size=self._min, max_size=self._max,
                 command_timeout=60, statement_cache_size=0)
         return self._pool
 
-    async def close(self, *, ждать: float = 10.0):
+    async def закрыть(self, *, ждать: float = 10.0):
         """Закрыть пул. Вежливое прощание ограничено по времени: база бывает далеко,
         и ждать его бесконечно — значит подвесить прогон уже после того, как всё записано."""
         if self._pool is None:
@@ -92,151 +92,152 @@ class Store:
                     raise
                 await asyncio.sleep(0.05 * 2 ** (попытка - 1) * (1 + random.random()))
 
-    async def apply_schema(self):
+    async def применить_схему(self):
         sql = (pathlib.Path(__file__).with_name("schema.sql")).read_text(encoding="utf-8")
-        async with (await self.pool()).acquire() as c:
+        async with (await self.пул()).acquire() as c:
             await c.execute(sql)
 
     # ------------------------------------------------------------------ каталог
 
-    async def apply_catalog(self, разобранное: dict, *, slice_key: str,
-                            slice_url: str | None = None, page: int = 1,
-                            region: str | None = None, category: str | None = None,
-                            filters: str | None = None, proxy: str | None = None) -> dict:
-        """Записывает страницу выдачи: объявления, продавцов, фото, членство, курсор.
+    async def записать_выдачу(self, разобранное: dict, *, ключ: str,
+                              ссылка: str | None = None, страница: int = 1,
+                              регион: str | None = None, категория: str | None = None,
+                              фильтры: str | None = None, адрес: str | None = None) -> dict:
+        """Записывает страницу выдачи: объявления, продавцов, фото, находки, обращение.
 
-        slice_key — устойчивое имя среза, по нему он и опознаётся между прогонами.
-        slice_url — его нынешний адрес: он меняется вместе с кодом фильтра.
+        ключ — устойчивое имя запроса, по нему он и опознаётся между прогонами.
+        ссылка — его нынешний адрес: он меняется вместе с кодом фильтра.
 
         Страница пишется одной транзакцией: половина страницы в базе хуже, чем её
         отсутствие — по ней не видно, что мы чего-то не дописали.
         """
-        items = разобранное["items"]
+        объявления = разобранное["объявления"]
 
         async def записать():
-            async with (await self.pool()).acquire() as c, c.transaction():
-                slice_id = await c.fetchval(
+            async with (await self.пул()).acquire() as c, c.transaction():
+                запрос = await c.fetchval(
                     """
-                    insert into slices (ключ, url, region, category, filters, total_count,
-                                        pages_total, updated_at)
+                    insert into запросы (ключ, ссылка, регион, категория, фильтры,
+                                         нашлось, страниц, обновлён)
                     values ($1, $2, $3, $4, $5, $6, $7, now())
                     on conflict (ключ) do update set
-                        url         = coalesce(excluded.url, slices.url),
-                        filters     = coalesce(excluded.filters, slices.filters),
-                        total_count = excluded.total_count,
-                        pages_total = excluded.pages_total,
-                        updated_at  = now()
-                    returning slice_id
+                        ссылка   = coalesce(excluded.ссылка, запросы.ссылка),
+                        фильтры  = coalesce(excluded.фильтры, запросы.фильтры),
+                        нашлось  = excluded.нашлось,
+                        страниц  = excluded.страниц,
+                        обновлён = now()
+                    returning номер
                     """,
-                    slice_key, slice_url or slice_key, region, category,
-                    json.dumps({"описание": filters},
-                               ensure_ascii=False) if filters else None,
-                    разобранное.get("count"), разобранное.get("last_page"))
+                    ключ, ссылка or ключ, регион, категория,
+                    json.dumps({"описание": фильтры},
+                               ensure_ascii=False) if фильтры else None,
+                    разобранное.get("нашлось"), разобранное.get("страниц"))
 
-                записано = await self._записать_объявления(c, items, источник="catalog")
-
-                await c.execute(
-                    """
-                    insert into slice_items (slice_id, item_id, page)
-                    select $1, x.item_id, $2
-                    from jsonb_to_recordset($3::jsonb) as x(item_id bigint)
-                    on conflict (slice_id, item_id) do update set
-                        page = excluded.page, last_seen_at = now()
-                    """, slice_id, page,
-                    json.dumps([{"item_id": int(i["item_id"])} for i in items]))
+                записано = await self._объявления(c, объявления, источник="каталог")
 
                 await c.execute(
                     """
-                    insert into fetches (slice_id, page, items_count, proxy, outcome)
+                    insert into находки (запрос, объявление, страница)
+                    select $1, x.объявление, $2
+                    from jsonb_to_recordset($3::jsonb) as x(объявление bigint)
+                    on conflict (запрос, объявление) do update set
+                        страница = excluded.страница, последний_раз = now()
+                    """, запрос, страница,
+                    json.dumps([{"объявление": int(о["номер"])} for о in объявления]))
+
+                await c.execute(
+                    """
+                    insert into обращения (запрос, страница, объявлений, адрес, исход)
                     values ($1, $2, $3, $4, 'ок')
-                    """, slice_id, page, len(items), proxy)
+                    """, запрос, страница, len(объявления), адрес)
 
-            записано["slice_id"] = slice_id
+            записано["запрос"] = запрос
             return записано
 
         return await self._повторяя(записать)
 
     # ------------------------------------------------------------------ карточка
 
-    async def apply_item(self, карточка: dict, *, proxy: str | None = None) -> dict:
+    async def записать_карточку(self, карточка: dict, *, адрес: str | None = None) -> dict:
         """Записывает карточку: она приносит описание, характеристики и просмотры."""
         async def записать():
-            async with (await self.pool()).acquire() as c, c.transaction():
-                return await self._записать_объявления(c, [карточка], источник="item")
+            async with (await self.пул()).acquire() as c, c.transaction():
+                return await self._объявления(c, [карточка], источник="карточка")
 
         return await self._повторяя(записать)
 
-    async def mark_removed(self, item_id: int | str, *, reason: str = "removed") -> bool:
-        """Объявление снято — узнаём по редиректу с /items/{id}, это точный сигнал."""
-        async with (await self.pool()).acquire() as c:
+    async def пометить_снятым(self, номер: int | str, *, почему: str = "снято") -> bool:
+        """Объявление снято — узнаём по редиректу с /items/{номер}, это точный сигнал."""
+        async with (await self.пул()).acquire() as c:
             строка = await c.fetchrow(
                 """
-                update items set is_dead = true, died_at = coalesce(died_at, now()),
-                                 dead_reason = $2, last_seen_at = now()
-                where item_id = $1 and not is_dead
-                returning item_id
-                """, int(item_id), reason)
+                update объявления set снято = true,
+                                      снято_когда = coalesce(снято_когда, now()),
+                                      снято_почему = $2, последний_раз = now()
+                where номер = $1 and not снято
+                returning номер
+                """, int(номер), почему)
         return строка is not None
 
     # ------------------------------------------------------------------ внутреннее
 
-    async def _записать_объявления(self, c: asyncpg.Connection, items: list[dict],
-                                   *, источник: str) -> dict:
-        if not items:
+    async def _объявления(self, c: asyncpg.Connection, объявления: list[dict],
+                          *, источник: str) -> dict:
+        if not объявления:
             return {"объявлений": 0, "изменений": 0}
 
-        продавцы = await self._записать_продавцов(c, items)
+        продавцы = await self._продавцов(c, объявления)
         payload = []
-        for об in items:
-            ключ = об.get("seller_key") or об.get("seller_id")
-            бренд = об.get("seller_brand")
+        for об in объявления:
+            опознание = об.get("продавец_ключ") or об.get("продавец_бренд")
             payload.append({
-                "item_id": int(об["item_id"]),
-                "url": об.get("url") or об.get("canonical"),
-                "title": об.get("title"),
-                "price": об.get("price"),
-                "snippet": об.get("snippet"),
-                "description": об.get("description"),
-                "category": об.get("category"),
-                "category_id": об.get("category_id"),
-                "micro_category_id": об.get("micro_category_id"),
-                "city": об.get("city"),
-                "location_id": об.get("location_id"),
-                "address": об.get("address"),
-                "area": об.get("area"),
-                "lat": (об.get("coords") or {}).get("lat"),
-                "lng": (об.get("coords") or {}).get("lng"),
+                "номер": int(об["номер"]),
+                "ссылка": об.get("ссылка") or об.get("постоянная_ссылка"),
+                "заголовок": об.get("заголовок"),
+                "цена": об.get("цена"),
+                "выжимка": об.get("выжимка"),
+                "описание": об.get("описание"),
+                "категория": об.get("категория"),
+                "код_категории": об.get("код_категории"),
+                "код_подкатегории": об.get("код_подкатегории"),
+                "город": об.get("город"),
+                "код_места": об.get("код_места"),
+                "адрес": об.get("адрес"),
+                "местность": об.get("местность"),
+                "широта": (об.get("координаты") or {}).get("широта"),
+                "долгота": (об.get("координаты") or {}).get("долгота"),
                 # кладём как есть: весь payload сериализуется один раз ниже,
                 # иначе jsonb получит строку вместо объекта
-                "metro": об.get("metro"),
-                "characteristics": об.get("characteristics"),
-                "views_total": об.get("views_total"),
-                "views_today": об.get("views_today"),
-                "published_ts": об.get("published_ts"),
-                "published_at": об.get("published_at"),
-                "is_active": об.get("is_active"),
-                "seller_id": продавцы.get(ключ or бренд),
+                "метро": об.get("метро"),
+                "характеристики": об.get("характеристики"),
+                "просмотров_всего": об.get("просмотров_всего"),
+                "просмотров_сегодня": об.get("просмотров_сегодня"),
+                "поднято_мс": об.get("поднято_мс"),
+                "поднято": об.get("поднято"),
+                "активно": об.get("активно"),
+                "продавец": продавцы.get(опознание),
             })
 
         строки = json.dumps(payload, ensure_ascii=False, default=str)
         изменений = await c.fetchval(_SQL_ОБЪЯВЛЕНИЯ, строки, источник)
-        await self._записать_фото(c, items, источник)
-        return {"объявлений": len(items), "изменений": изменений or 0}
+        await self._фотографии(c, объявления, источник)
+        return {"объявлений": len(объявления), "изменений": изменений or 0}
 
-    async def _записать_продавцов(self, c: asyncpg.Connection, items: list[dict]) -> dict:
+    async def _продавцов(self, c: asyncpg.Connection, объявления: list[dict]) -> dict:
         сырые = {}
-        for об in items:
-            ключ = об.get("seller_key") or об.get("seller_id")
-            бренд = об.get("seller_brand")
+        for об in объявления:
+            ключ, бренд = об.get("продавец_ключ"), об.get("продавец_бренд")
             if not ключ and not бренд:
                 continue
-            сырые[ключ or бренд] = (ключ, бренд, об.get("seller_name"),
-                                    об.get("seller_is_company"), об.get("seller_since"),
-                                    об.get("seller_rating"), об.get("seller_reviews"))
+            сырые[ключ or бренд] = (ключ, бренд, об.get("продавец_имя"),
+                                    об.get("продавец_компания"),
+                                    об.get("продавец_на_авито_с"),
+                                    об.get("продавец_рейтинг"),
+                                    об.get("продавец_отзывов"))
         if not сырые:
             return {}
-        payload = [{"опознание": о, "seller_key": к, "brand": б, "name": и,
-                    "is_company": комп, "since": ст, "rating": р, "reviews": отз}
+        payload = [{"опознание": о, "ключ": к, "бренд": б, "имя": и,
+                    "компания": комп, "на_авито_с": ст, "рейтинг": р, "отзывов": отз}
                    for о, (к, б, и, комп, ст, р, отз) in сырые.items()]
         # порядок, одинаковый у всех работников: продавцы берутся строем, и двое,
         # встретившие одних и тех же, не встают в клинч на встречных блокировках
@@ -248,27 +249,30 @@ class Store:
         await c.execute(_SQL_ПРОДАВЦЫ_ВСТАВКА, строки)
         найденные = await c.fetch(_SQL_ПРОДАВЦЫ_ПОИСК, строки)
         await c.execute(_SQL_ПРОДАВЦЫ_ДОПОЛНЕНИЕ, строки)
-        return {r["опознание"]: r["seller_id"] for r in найденные}
+        return {r["опознание"]: r["номер"] for r in найденные}
 
-    async def _записать_фото(self, c: asyncpg.Connection, items: list[dict], источник: str):
-        строки = []
-        for об in items:
-            for i, url in enumerate(об.get("images") or []):
+    async def _фотографии(self, c: asyncpg.Connection, объявления: list[dict],
+                          источник: str):
+        payload = []
+        for об in объявления:
+            for i, url in enumerate(об.get("фотографии") or []):
                 сторона = None
                 if "/image/" in url:
-                    сторона = 1280 if источник == "item" else 472
-                строки.append((int(об["item_id"]), _хеш(url), url, сторона, i, источник))
-        if not строки:
+                    сторона = 1280 if источник == "карточка" else 472
+                payload.append({"объявление": int(об["номер"]), "отпечаток": _хеш(url),
+                                "ссылка": url, "сторона": сторона, "порядок": i,
+                                "источник": источник})
+        if not payload:
             return
-        payload = [{"item_id": a, "url_hash": b, "url": u, "max_side": m,
-                    "idx": i, "source": src} for a, b, u, m, i, src in строки]
         await c.execute(
             """
-            insert into item_images (item_id, url_hash, url, max_side, idx, source)
+            insert into фотографии (объявление, отпечаток, ссылка, сторона, порядок,
+                                    источник)
             select * from jsonb_to_recordset($1::jsonb) as x(
-                item_id bigint, url_hash text, url text, max_side int, idx int, source text)
-            on conflict (item_id, url_hash) do update set
-                idx = excluded.idx, seen_at = now()
+                объявление bigint, отпечаток text, ссылка text, сторона int,
+                порядок int, источник text)
+            on conflict (объявление, отпечаток) do update set
+                порядок = excluded.порядок, когда = now()
             """, json.dumps(payload, ensure_ascii=False))
 
 
@@ -277,79 +281,82 @@ class Store:
 _SQL_ОБЪЯВЛЕНИЯ = """
 with новые as (
     select * from jsonb_to_recordset($1::jsonb) as x(
-        item_id bigint, url text, title text, price bigint, snippet text,
-        description text, category text, category_id int, micro_category_id int,
-        city text, location_id int, address text, area text,
-        lat double precision, lng double precision, metro jsonb, characteristics jsonb,
-        views_total int, views_today int, published_ts bigint, published_at timestamptz,
-        is_active boolean, seller_id bigint)
+        номер bigint, ссылка text, заголовок text, цена bigint, выжимка text,
+        описание text, категория text, код_категории int, код_подкатегории int,
+        город text, код_места int, адрес text, местность text,
+        широта double precision, долгота double precision, метро jsonb,
+        характеристики jsonb, просмотров_всего int, просмотров_сегодня int,
+        поднято_мс bigint, поднято timestamptz, активно boolean, продавец bigint)
 ),
 прежние as (
-    select i.item_id, i.price, i.title, i.is_active, i.published_ts, i.seller_id
-    from items i join новые n using (item_id)
+    select о.номер, о.цена, о.заголовок, о.активно, о.поднято_мс, о.продавец
+    from объявления о join новые n using (номер)
 ),
 запись as (
-    insert into items as i (
-        item_id, url, title, price, snippet, description, category, category_id,
-        micro_category_id, city, location_id, address, area, lat, lng, metro,
-        characteristics, views_total, views_today, published_ts, published_at,
-        is_active, seller_id, last_seen_at,
-        last_catalog_at, last_item_at)
-    select n.item_id, n.url, n.title, n.price, n.snippet, n.description, n.category,
-           n.category_id, n.micro_category_id, n.city, n.location_id, n.address, n.area,
-           n.lat, n.lng, n.metro, n.characteristics, n.views_total, n.views_today,
-           n.published_ts, n.published_at, n.is_active, n.seller_id, now(),
-           case when $2 = 'catalog' then now() end,
-           case when $2 = 'item'    then now() end
+    insert into объявления as о (
+        номер, ссылка, заголовок, цена, выжимка, описание, категория, код_категории,
+        код_подкатегории, город, код_места, адрес, местность, широта, долгота, метро,
+        характеристики, просмотров_всего, просмотров_сегодня, поднято_мс, поднято,
+        активно, продавец, последний_раз, видели_в_каталоге, видели_карточку)
+    select n.номер, n.ссылка, n.заголовок, n.цена, n.выжимка, n.описание, n.категория,
+           n.код_категории, n.код_подкатегории, n.город, n.код_места, n.адрес,
+           n.местность, n.широта, n.долгота, n.метро, n.характеристики,
+           n.просмотров_всего, n.просмотров_сегодня, n.поднято_мс, n.поднято,
+           n.активно, n.продавец, now(),
+           case when $2 = 'каталог'  then now() end,
+           case when $2 = 'карточка' then now() end
     from новые n
-    on conflict (item_id) do update set
+    on conflict (номер) do update set
         -- свежее побеждает, но пустотой не затираем: источник может не знать поля
-        url             = coalesce(excluded.url, i.url),
-        title           = coalesce(excluded.title, i.title),
-        price           = coalesce(excluded.price, i.price),
-        snippet         = coalesce(excluded.snippet, i.snippet),
-        description     = coalesce(excluded.description, i.description),
-        category        = coalesce(excluded.category, i.category),
-        category_id     = coalesce(excluded.category_id, i.category_id),
-        micro_category_id = coalesce(excluded.micro_category_id, i.micro_category_id),
-        city            = coalesce(excluded.city, i.city),
-        location_id     = coalesce(excluded.location_id, i.location_id),
-        address         = coalesce(excluded.address, i.address),
-        area            = coalesce(excluded.area, i.area),
-        lat             = coalesce(excluded.lat, i.lat),
-        lng             = coalesce(excluded.lng, i.lng),
-        metro           = coalesce(excluded.metro, i.metro),
-        characteristics = coalesce(excluded.characteristics, i.characteristics),
-        views_total     = coalesce(excluded.views_total, i.views_total),
-        views_today     = coalesce(excluded.views_today, i.views_today),
-        published_ts    = coalesce(excluded.published_ts, i.published_ts),
-        published_at    = coalesce(excluded.published_at, i.published_at),
-        is_active       = coalesce(excluded.is_active, i.is_active),
-        seller_id       = coalesce(excluded.seller_id, i.seller_id),
-        last_seen_at    = now(),
-        last_catalog_at = case when $2 = 'catalog' then now() else i.last_catalog_at end,
-        last_item_at    = case when $2 = 'item'    then now() else i.last_item_at end,
+        ссылка             = coalesce(excluded.ссылка, о.ссылка),
+        заголовок          = coalesce(excluded.заголовок, о.заголовок),
+        цена               = coalesce(excluded.цена, о.цена),
+        выжимка            = coalesce(excluded.выжимка, о.выжимка),
+        описание           = coalesce(excluded.описание, о.описание),
+        категория          = coalesce(excluded.категория, о.категория),
+        код_категории      = coalesce(excluded.код_категории, о.код_категории),
+        код_подкатегории   = coalesce(excluded.код_подкатегории, о.код_подкатегории),
+        город              = coalesce(excluded.город, о.город),
+        код_места          = coalesce(excluded.код_места, о.код_места),
+        адрес              = coalesce(excluded.адрес, о.адрес),
+        местность          = coalesce(excluded.местность, о.местность),
+        широта             = coalesce(excluded.широта, о.широта),
+        долгота            = coalesce(excluded.долгота, о.долгота),
+        метро              = coalesce(excluded.метро, о.метро),
+        характеристики     = coalesce(excluded.характеристики, о.характеристики),
+        просмотров_всего   = coalesce(excluded.просмотров_всего, о.просмотров_всего),
+        просмотров_сегодня = coalesce(excluded.просмотров_сегодня, о.просмотров_сегодня),
+        поднято_мс         = coalesce(excluded.поднято_мс, о.поднято_мс),
+        поднято            = coalesce(excluded.поднято, о.поднято),
+        активно            = coalesce(excluded.активно, о.активно),
+        продавец           = coalesce(excluded.продавец, о.продавец),
+        последний_раз      = now(),
+        видели_в_каталоге  = case when $2 = 'каталог'
+                                  then now() else о.видели_в_каталоге end,
+        видели_карточку    = case when $2 = 'карточка'
+                                  then now() else о.видели_карточку end,
         -- увидели снова — значит живо
-        is_dead = false, died_at = null, dead_reason = null
-    returning i.item_id
+        снято = false, снято_когда = null, снято_почему = null
+    returning о.номер
 ),
-наблюдения as (
-    insert into item_metrics (item_id, views_total, views_today, published_ts, price, source)
-    select n.item_id, n.views_total, n.views_today, n.published_ts, n.price, $2
+замеры as (
+    insert into наблюдения (объявление, просмотров_всего, просмотров_сегодня,
+                            поднято_мс, цена, источник)
+    select n.номер, n.просмотров_всего, n.просмотров_сегодня, n.поднято_мс, n.цена, $2
     from новые n
-    on conflict (item_id, seen_at) do nothing
+    on conflict (объявление, когда) do nothing
 ),
 события as (
-    insert into changes (item_id, field, old_value, new_value, source)
-    select n.item_id, поле, старое, новое, $2
+    insert into изменения (объявление, поле, было, стало, источник)
+    select n.номер, поле, старое, новое, $2
     from новые n
-    join прежние p using (item_id)
+    join прежние p using (номер)
     cross join lateral (values
-        ('price',        p.price::text,        n.price::text),
-        ('title',        p.title,              n.title),
-        ('is_active',    p.is_active::text,    n.is_active::text),
-        ('published_ts', p.published_ts::text, n.published_ts::text),
-        ('seller_id',    p.seller_id::text,    n.seller_id::text)
+        ('цена',       p.цена::text,       n.цена::text),
+        ('заголовок',  p.заголовок,        n.заголовок),
+        ('активно',    p.активно::text,    n.активно::text),
+        ('поднято_мс', p.поднято_мс::text, n.поднято_мс::text),
+        ('продавец',   p.продавец::text,   n.продавец::text)
     ) as v(поле, старое, новое)
     -- из «не знали» в «узнали» — это не изменение объявления, а наше знание
     where новое is not null and старое is not null and старое is distinct from новое
@@ -366,15 +373,15 @@ select count(*)::int from события
 # не знаем» бессмысленно и опасно: пока мы отбирали, соседний работник вставил того же
 # магазина, и его строку мы даже не увидим — у нашей транзакции свой снимок базы.
 # Единственный, кто знает правду в этот момент, — уникальный индекс, ему и решать.
-# Уникальных ключа два, seller_key и brand, поэтому on conflict без указания индекса:
-# так он ловит любой из них. Лишняя попытка вставки уже известного продавца стоит
-# дешевле, чем потерянная страница.
+# Уникальных ключа два, ключ и бренд, поэтому on conflict без указания индекса: так он
+# ловит любой из них. Лишняя попытка вставки уже известного продавца стоит дешевле,
+# чем потерянная страница.
 _SQL_ПРОДАВЦЫ_ВСТАВКА = """
-insert into sellers (seller_key, brand, name, is_company, since, rating, reviews)
-select n.seller_key, n.brand, n.name, n.is_company, n.since, n.rating, n.reviews
+insert into продавцы (ключ, бренд, имя, компания, на_авито_с, рейтинг, отзывов)
+select n.ключ, n.бренд, n.имя, n.компания, n.на_авито_с, n.рейтинг, n.отзывов
 from jsonb_to_recordset($1::jsonb) as n(
-    опознание text, seller_key text, brand text, name text,
-    is_company boolean, since text, rating numeric, reviews int)
+    опознание text, ключ text, бренд text, имя text,
+    компания boolean, на_авито_с text, рейтинг numeric, отзывов int)
 on conflict do nothing
 """
 
@@ -382,11 +389,11 @@ on conflict do nothing
 # появившихся — и наших, и чужих. Продавец опознаётся по ключу или по бренду; если на
 # него отвечают две строки, берём ту, что старше.
 _SQL_ПРОДАВЦЫ_ПОИСК = """
-select distinct on (n.опознание) n.опознание, s.seller_id
-from jsonb_to_recordset($1::jsonb) as n(опознание text, seller_key text, brand text)
-join sellers s on (n.seller_key is not null and s.seller_key = n.seller_key)
-               or (n.brand is not null and s.brand = n.brand)
-order by n.опознание, s.seller_id
+select distinct on (n.опознание) n.опознание, п.номер
+from jsonb_to_recordset($1::jsonb) as n(опознание text, ключ text, бренд text)
+join продавцы п on (n.ключ is not null and п.ключ = n.ключ)
+                or (n.бренд is not null and п.бренд = n.бренд)
+order by n.опознание, п.номер
 """
 
 # Шаг третий: дозаполнить пустоты у тех, кто уже был. Каталог видит у магазина только
@@ -394,39 +401,37 @@ order by n.опознание, s.seller_id
 _SQL_ПРОДАВЦЫ_ДОПОЛНЕНИЕ = """
 with новые as (
     select * from jsonb_to_recordset($1::jsonb) as x(
-        опознание text, seller_key text, brand text, name text,
-        is_company boolean, since text, rating numeric, reviews int)
+        опознание text, ключ text, бренд text, имя text,
+        компания boolean, на_авито_с text, рейтинг numeric, отзывов int)
 ),
 цель as (
-    select distinct on (n.опознание) n.опознание, s.seller_id
+    select distinct on (n.опознание) n.опознание, п.номер
     from новые n
-    join sellers s on (n.seller_key is not null and s.seller_key = n.seller_key)
-                   or (n.brand is not null and s.brand = n.brand)
-    order by n.опознание, s.seller_id
+    join продавцы п on (n.ключ is not null and п.ключ = n.ключ)
+                    or (n.бренд is not null and п.бренд = n.бренд)
+    order by n.опознание, п.номер
 )
-update sellers s set
+update продавцы п set
     -- ключ и бренд проставляем, только если их не занял кто-то другой: иначе попытка
     -- склеить две строки в одну упёрлась бы в уникальный индекс и уронила страницу.
     -- Оставить продавца раздвоенным неприятно, но это чинится потом, а потерянная
     -- страница не чинится никогда
-    seller_key = case
-        when s.seller_key is not null then s.seller_key
-        when exists (select 1 from sellers о where о.seller_key = n.seller_key
-                                             and о.seller_id <> s.seller_id)
-            then s.seller_key
-        else n.seller_key end,
-    brand = case
-        when s.brand is not null then s.brand
-        when exists (select 1 from sellers о where о.brand = n.brand
-                                             and о.seller_id <> s.seller_id)
-            then s.brand
-        else n.brand end,
-    name         = coalesce(n.name, s.name),
-    is_company   = coalesce(n.is_company, s.is_company),
-    since        = coalesce(n.since, s.since),
-    rating       = coalesce(n.rating, s.rating),
-    reviews      = coalesce(n.reviews, s.reviews),
-    last_seen_at = now()
-from цель f join новые n using (опознание)
-where s.seller_id = f.seller_id
+    ключ = case
+        when п.ключ is not null then п.ключ
+        when exists (select 1 from продавцы д
+                     where д.ключ = n.ключ and д.номер <> п.номер) then п.ключ
+        else n.ключ end,
+    бренд = case
+        when п.бренд is not null then п.бренд
+        when exists (select 1 from продавцы д
+                     where д.бренд = n.бренд and д.номер <> п.номер) then п.бренд
+        else n.бренд end,
+    имя           = coalesce(n.имя, п.имя),
+    компания      = coalesce(n.компания, п.компания),
+    на_авито_с    = coalesce(n.на_авито_с, п.на_авито_с),
+    рейтинг       = coalesce(n.рейтинг, п.рейтинг),
+    отзывов       = coalesce(n.отзывов, п.отзывов),
+    последний_раз = now()
+from цель ц join новые n using (опознание)
+where п.номер = ц.номер
 """
