@@ -11,6 +11,12 @@
     поднятие объявления, смена продавца;
   * при недоступной базе ничего не буферизуем и падаем — так решено сознательно.
 
+Писать сюда могут несколько обходов сразу, и это учтено: одни и те же продавцы
+встречаются в выдаче по разным запросам одновременно, поэтому «посмотреть, есть ли
+такой, и вставить» здесь не работает в принципе — соседняя транзакция в эту щель и
+попадает. Уникальность разрешает сама база, а столкновение двух работников считается
+рабочим моментом и повторяется, а не выходит наружу.
+
 Схема живёт рядом в schema.sql и применяется методом apply_schema().
 """
 from __future__ import annotations
@@ -21,6 +27,7 @@ import hashlib
 import json
 import os
 import pathlib
+import random
 
 import asyncpg
 
@@ -35,6 +42,11 @@ def _дсн(явно: str | None = None) -> str:
 
 # поля, изменение которых пишется в журнал
 ОТСЛЕЖИВАЕМЫЕ = ("price", "title", "is_active", "published_ts", "seller_id")
+
+# столкновения двух работников на одних и тех же строках
+СТОЛКНОВЕНИЯ = (asyncpg.DeadlockDetectedError, asyncpg.UniqueViolationError,
+                asyncpg.SerializationError)
+ПОВТОРОВ_НА_СТОЛКНОВЕНИИ = 4
 
 
 def _хеш(s: str) -> str:
@@ -65,6 +77,21 @@ class Store:
         finally:
             self._pool = None
 
+    async def _повторяя(self, работа):
+        """Выполнить запись, пережив столкновение с соседним работником.
+
+        Транзакция откатывается целиком, поэтому повтор безопасен: писать заново нечего,
+        всё пишется через upsert. Пауза с нарастанием и разбросом — чтобы двое, налетев
+        друг на друга, не пошли на второй круг тем же строем.
+        """
+        for попытка in range(1, ПОВТОРОВ_НА_СТОЛКНОВЕНИИ + 1):
+            try:
+                return await работа()
+            except СТОЛКНОВЕНИЯ:
+                if попытка == ПОВТОРОВ_НА_СТОЛКНОВЕНИИ:
+                    raise
+                await asyncio.sleep(0.05 * 2 ** (попытка - 1) * (1 + random.random()))
+
     async def apply_schema(self):
         sql = (pathlib.Path(__file__).with_name("schema.sql")).read_text(encoding="utf-8")
         async with (await self.pool()).acquire() as c:
@@ -80,53 +107,64 @@ class Store:
 
         slice_key — устойчивое имя среза, по нему он и опознаётся между прогонами.
         slice_url — его нынешний адрес: он меняется вместе с кодом фильтра.
+
+        Страница пишется одной транзакцией: половина страницы в базе хуже, чем её
+        отсутствие — по ней не видно, что мы чего-то не дописали.
         """
         items = разобранное["items"]
-        async with (await self.pool()).acquire() as c, c.transaction():
-            slice_id = await c.fetchval(
-                """
-                insert into slices (ключ, url, region, category, filters, total_count,
-                                    pages_total, updated_at)
-                values ($1, $2, $3, $4, $5, $6, $7, now())
-                on conflict (ключ) do update set
-                    url         = coalesce(excluded.url, slices.url),
-                    filters     = coalesce(excluded.filters, slices.filters),
-                    total_count = excluded.total_count,
-                    pages_total = excluded.pages_total,
-                    updated_at  = now()
-                returning slice_id
-                """,
-                slice_key, slice_url or slice_key, region, category,
-                json.dumps({"описание": filters}, ensure_ascii=False) if filters else None,
-                разобранное.get("count"), разобранное.get("last_page"))
 
-            записано = await self._записать_объявления(c, items, источник="catalog")
+        async def записать():
+            async with (await self.pool()).acquire() as c, c.transaction():
+                slice_id = await c.fetchval(
+                    """
+                    insert into slices (ключ, url, region, category, filters, total_count,
+                                        pages_total, updated_at)
+                    values ($1, $2, $3, $4, $5, $6, $7, now())
+                    on conflict (ключ) do update set
+                        url         = coalesce(excluded.url, slices.url),
+                        filters     = coalesce(excluded.filters, slices.filters),
+                        total_count = excluded.total_count,
+                        pages_total = excluded.pages_total,
+                        updated_at  = now()
+                    returning slice_id
+                    """,
+                    slice_key, slice_url or slice_key, region, category,
+                    json.dumps({"описание": filters},
+                               ensure_ascii=False) if filters else None,
+                    разобранное.get("count"), разобранное.get("last_page"))
 
-            await c.execute(
-                """
-                insert into slice_items (slice_id, item_id, page)
-                select $1, x.item_id, $2
-                from jsonb_to_recordset($3::jsonb) as x(item_id bigint)
-                on conflict (slice_id, item_id) do update set
-                    page = excluded.page, last_seen_at = now()
-                """, slice_id, page,
-                json.dumps([{"item_id": int(i["item_id"])} for i in items]))
+                записано = await self._записать_объявления(c, items, источник="catalog")
 
-            await c.execute(
-                """
-                insert into fetches (slice_id, page, items_count, proxy, outcome)
-                values ($1, $2, $3, $4, 'ок')
-                """, slice_id, page, len(items), proxy)
+                await c.execute(
+                    """
+                    insert into slice_items (slice_id, item_id, page)
+                    select $1, x.item_id, $2
+                    from jsonb_to_recordset($3::jsonb) as x(item_id bigint)
+                    on conflict (slice_id, item_id) do update set
+                        page = excluded.page, last_seen_at = now()
+                    """, slice_id, page,
+                    json.dumps([{"item_id": int(i["item_id"])} for i in items]))
 
-        записано["slice_id"] = slice_id
-        return записано
+                await c.execute(
+                    """
+                    insert into fetches (slice_id, page, items_count, proxy, outcome)
+                    values ($1, $2, $3, $4, 'ок')
+                    """, slice_id, page, len(items), proxy)
+
+            записано["slice_id"] = slice_id
+            return записано
+
+        return await self._повторяя(записать)
 
     # ------------------------------------------------------------------ карточка
 
     async def apply_item(self, карточка: dict, *, proxy: str | None = None) -> dict:
         """Записывает карточку: она приносит описание, характеристики и просмотры."""
-        async with (await self.pool()).acquire() as c, c.transaction():
-            return await self._записать_объявления(c, [карточка], источник="item")
+        async def записать():
+            async with (await self.pool()).acquire() as c, c.transaction():
+                return await self._записать_объявления(c, [карточка], источник="item")
+
+        return await self._повторяя(записать)
 
     async def mark_removed(self, item_id: int | str, *, reason: str = "removed") -> bool:
         """Объявление снято — узнаём по редиректу с /items/{id}, это точный сигнал."""
@@ -200,9 +238,17 @@ class Store:
         payload = [{"опознание": о, "seller_key": к, "brand": б, "name": и,
                     "is_company": комп, "since": ст, "rating": р, "reviews": отз}
                    for о, (к, б, и, комп, ст, р, отз) in сырые.items()]
-        строки = await c.fetch(_SQL_ПРОДАВЦЫ, json.dumps(payload, ensure_ascii=False,
-                                                         default=str))
-        return {r["опознание"]: r["seller_id"] for r in строки}
+        # порядок, одинаковый у всех работников: продавцы берутся строем, и двое,
+        # встретившие одних и тех же, не встают в клинч на встречных блокировках
+        payload.sort(key=lambda з: з["опознание"])
+        строки = json.dumps(payload, ensure_ascii=False, default=str)
+
+        # Тремя шагами, а не одним запросом: внутри одного запроса ветки видят базу
+        # такой, какой она была до начала, и поиск не заметил бы только что вставленных.
+        await c.execute(_SQL_ПРОДАВЦЫ_ВСТАВКА, строки)
+        найденные = await c.fetch(_SQL_ПРОДАВЦЫ_ПОИСК, строки)
+        await c.execute(_SQL_ПРОДАВЦЫ_ДОПОЛНЕНИЕ, строки)
+        return {r["опознание"]: r["seller_id"] for r in найденные}
 
     async def _записать_фото(self, c: asyncpg.Connection, items: list[dict], источник: str):
         строки = []
@@ -313,45 +359,74 @@ select count(*)::int from события
 """
 
 
-# Продавцы одним запросом: находим по ключу или бренду, недостающих вставляем,
-# у найденных дозаполняем пустоты. Иначе на удалённой базе это сотня обращений.
-_SQL_ПРОДАВЦЫ = """
+# Продавцы пишутся тремя запросами: вставить, найти, дозаполнить. Всё пачкой — иначе
+# на удалённой базе это сотня обращений на страницу.
+#
+# Шаг первый: вставляем всех, кого принесла страница. Отбирать заранее «а кого мы ещё
+# не знаем» бессмысленно и опасно: пока мы отбирали, соседний работник вставил того же
+# магазина, и его строку мы даже не увидим — у нашей транзакции свой снимок базы.
+# Единственный, кто знает правду в этот момент, — уникальный индекс, ему и решать.
+# Уникальных ключа два, seller_key и brand, поэтому on conflict без указания индекса:
+# так он ловит любой из них. Лишняя попытка вставки уже известного продавца стоит
+# дешевле, чем потерянная страница.
+_SQL_ПРОДАВЦЫ_ВСТАВКА = """
+insert into sellers (seller_key, brand, name, is_company, since, rating, reviews)
+select n.seller_key, n.brand, n.name, n.is_company, n.since, n.rating, n.reviews
+from jsonb_to_recordset($1::jsonb) as n(
+    опознание text, seller_key text, brand text, name text,
+    is_company boolean, since text, rating numeric, reviews int)
+on conflict do nothing
+"""
+
+# Шаг второй: кто есть кто. Идёт после вставки, поэтому находит и старых, и только что
+# появившихся — и наших, и чужих. Продавец опознаётся по ключу или по бренду; если на
+# него отвечают две строки, берём ту, что старше.
+_SQL_ПРОДАВЦЫ_ПОИСК = """
+select distinct on (n.опознание) n.опознание, s.seller_id
+from jsonb_to_recordset($1::jsonb) as n(опознание text, seller_key text, brand text)
+join sellers s on (n.seller_key is not null and s.seller_key = n.seller_key)
+               or (n.brand is not null and s.brand = n.brand)
+order by n.опознание, s.seller_id
+"""
+
+# Шаг третий: дозаполнить пустоты у тех, кто уже был. Каталог видит у магазина только
+# слаг бренда, карточка приносит настоящий ключ — так они и склеиваются.
+_SQL_ПРОДАВЦЫ_ДОПОЛНЕНИЕ = """
 with новые as (
     select * from jsonb_to_recordset($1::jsonb) as x(
         опознание text, seller_key text, brand text, name text,
         is_company boolean, since text, rating numeric, reviews int)
 ),
-найденные as (
+цель as (
     select distinct on (n.опознание) n.опознание, s.seller_id
     from новые n
     join sellers s on (n.seller_key is not null and s.seller_key = n.seller_key)
                    or (n.brand is not null and s.brand = n.brand)
     order by n.опознание, s.seller_id
-),
-дополнение as (
-    update sellers s set
-        seller_key   = coalesce(s.seller_key, n.seller_key),
-        brand        = coalesce(s.brand, n.brand),
-        name         = coalesce(n.name, s.name),
-        is_company   = coalesce(n.is_company, s.is_company),
-        since        = coalesce(n.since, s.since),
-        rating       = coalesce(n.rating, s.rating),
-        reviews      = coalesce(n.reviews, s.reviews),
-        last_seen_at = now()
-    from найденные f join новые n using (опознание)
-    where s.seller_id = f.seller_id
-),
-вставка as (
-    insert into sellers (seller_key, brand, name, is_company, since, rating, reviews)
-    select n.seller_key, n.brand, n.name, n.is_company, n.since, n.rating, n.reviews
-    from новые n
-    where not exists (select 1 from найденные f where f.опознание = n.опознание)
-    returning seller_id, seller_key, brand
 )
-select f.опознание, f.seller_id from найденные f
-union all
-select n.опознание, v.seller_id
-from вставка v join новые n
-  on (v.seller_key is not null and v.seller_key = n.seller_key)
-  or (v.seller_key is null and v.brand = n.brand)
+update sellers s set
+    -- ключ и бренд проставляем, только если их не занял кто-то другой: иначе попытка
+    -- склеить две строки в одну упёрлась бы в уникальный индекс и уронила страницу.
+    -- Оставить продавца раздвоенным неприятно, но это чинится потом, а потерянная
+    -- страница не чинится никогда
+    seller_key = case
+        when s.seller_key is not null then s.seller_key
+        when exists (select 1 from sellers о where о.seller_key = n.seller_key
+                                             and о.seller_id <> s.seller_id)
+            then s.seller_key
+        else n.seller_key end,
+    brand = case
+        when s.brand is not null then s.brand
+        when exists (select 1 from sellers о where о.brand = n.brand
+                                             and о.seller_id <> s.seller_id)
+            then s.brand
+        else n.brand end,
+    name         = coalesce(n.name, s.name),
+    is_company   = coalesce(n.is_company, s.is_company),
+    since        = coalesce(n.since, s.since),
+    rating       = coalesce(n.rating, s.rating),
+    reviews      = coalesce(n.reviews, s.reviews),
+    last_seen_at = now()
+from цель f join новые n using (опознание)
+where s.seller_id = f.seller_id
 """
